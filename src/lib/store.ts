@@ -797,11 +797,30 @@ export const useStore = create<AppState>()(
           ? window.localStorage
           : { getItem: () => null, setItem: () => {}, removeItem: () => {} },
       ),
-      version: 2,
+      version: 3,
       partialize: (s) => {
-        // persist everything except transient action fns (handled automatically)
-        const { ...rest } = s;
-        return rest as AppState;
+        // Live-session bindings must be re-derived from the Supabase session on
+        // every load, never restored from a snapshot. If `hydrated` is persisted,
+        // LiveShell's "already hydrated" short-circuit skips bootstrap + hydrateFromDb,
+        // leaving a STALE workspaceId bound to every write — Supabase RLS then rejects
+        // each upsert (workspace_id not in current_workspaces()). Demo mode leaves these
+        // at their defaults (hydrated:false, workspaceId:null), so omitting them is a no-op there.
+        const persisted = { ...s } as Partial<AppState>;
+        delete persisted.hydrated;
+        delete persisted.workspaceId;
+        return persisted as AppState;
+      },
+      // v2 blobs persisted those flags; strip them so a stale snapshot can't shadow
+      // the live workspace. Entities are reloaded from the DB (live) or reseeded
+      // (demo), so keeping the rest of the persisted state is safe.
+      migrate: (persisted) => {
+        if (persisted && typeof persisted === "object") {
+          const p = persisted as Record<string, unknown>;
+          delete p.hydrated;
+          delete p.workspaceId;
+          return p as unknown as AppState;
+        }
+        return persisted as AppState;
       },
     },
   ),
