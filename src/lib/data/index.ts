@@ -10,7 +10,9 @@
  * onto threads, contacts onto campaigns, memberships+profiles into users).
  * ========================================================================= */
 
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import { createClient as sharedBrowserClient } from "../supabase/client";
 
 import type {
   Activity,
@@ -91,19 +93,15 @@ export interface WorkspaceSnapshot {
 /* Browser client — memoized, null when unconfigured.                          */
 /* -------------------------------------------------------------------------- */
 
-let browserDb: SupabaseClient<Database> | null | undefined;
-
 /**
- * Typed browser Supabase client. Memoized across calls. Returns null when
- * either public env var is missing (demo mode / build without config), which
- * makes every repo write a silent no-op. The auth session cookie scopes RLS.
+ * Typed browser Supabase client, delegated to the single shared instance in
+ * ../supabase/client — one cookie-aware client serves both auth and data, so
+ * queries and auth checks observe the same session and no duplicate GoTrue
+ * client is created. Returns null when unconfigured (demo/build), which makes
+ * every repo write a silent no-op.
  */
 export function getBrowserDb(): SupabaseClient<Database> | null {
-  if (browserDb !== undefined) return browserDb;
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  browserDb = url && key ? createClient<Database>(url, key) : null;
-  return browserDb;
+  return sharedBrowserClient();
 }
 
 /* -------------------------------------------------------------------------- */
