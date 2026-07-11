@@ -287,8 +287,10 @@ export interface EmailMessage {
   scheduledAt?: ISODate;
   sentAt?: ISODate;
   openedAt?: ISODate;
+  clickedAt?: ISODate;
   repliedAt?: ISODate;
   bounceReason?: string;
+  providerMessageId?: string;
   wordCount: number;
   abVariant?: string; // variant key when part of an experiment
   attempts?: number;

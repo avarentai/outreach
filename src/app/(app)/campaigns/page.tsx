@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 import { useStore, useSnapshot } from "@/lib/store";
 import { campaignStats, isSent, type CampaignStat } from "@/lib/engines/analytics";
 import { DEFAULT_SENDING_WINDOW } from "@/lib/engines/scheduler";
@@ -32,7 +33,6 @@ import {
   MoreHorizontal,
   ArrowRight,
 } from "lucide-react";
-import { toast } from "sonner";
 
 const STATUS_BADGE: Record<CampaignStatus, "success" | "warning" | "info" | "muted"> = {
   draft: "muted",
@@ -63,6 +63,26 @@ export default function CampaignsPage() {
 
   const [filter, setFilter] = React.useState("all");
   const [createOpen, setCreateOpen] = React.useState(false);
+
+  async function changeCampaignStatus(id: string, status: CampaignStatus) {
+    const campaign = campaigns.find((item) => item.id === id);
+    if (status === "active" && campaign?.status === "draft") {
+      const response = await fetch("/api/campaigns/activate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ campaignId: id }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        toast.error(data.error ?? "Campaign activation failed.");
+        return;
+      }
+      setCampaignStatus(id, "active");
+      toast.success(`Campaign activated - ${data.queued} sends queued`);
+      return;
+    }
+    setCampaignStatus(id, status);
+  }
 
   React.useEffect(() => {
     if (searchParams.get("new") === "1") setCreateOpen(true);
@@ -158,7 +178,7 @@ export default function CampaignsPage() {
                 owner={users.find((u) => u.id === c.ownerId)}
                 prospectCount={contacts.filter((ct) => ct.campaignId === c.id).length}
                 trend={trend}
-                onStatus={setCampaignStatus}
+                onStatus={(id, status) => void changeCampaignStatus(id, status)}
               />
             );
           })}

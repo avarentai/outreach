@@ -4,6 +4,10 @@
     {
       "path": "/api/worker/tick",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/email/sync",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

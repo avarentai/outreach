@@ -124,6 +124,17 @@ server-side by the background worker.
 
 ## Email sending
 
+### Zoho Mail (local/demo mode)
+
+Open **Settings → Sending Accounts** and connect a Zoho mailbox with its email address and an
+app-specific password. The app verifies `smtp.zoho.com:465` (or the selected Zoho regional data
+center) before enabling real manual replies from the Inbox. Credentials are held only in server
+memory behind an HTTP-only session cookie, expire after 12 hours, and are cleared when the dev
+server restarts. They are never written to `localStorage` or returned to the browser.
+
+For scheduled production campaigns, use live mode with Supabase and a server-managed sending
+provider. Do not persist raw SMTP passwords in client-accessible storage.
+
 Set either provider (or both — sending accounts pick their adapter):
 
 ```bash

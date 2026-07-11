@@ -11,6 +11,7 @@
 import { NextResponse } from "next/server";
 import { createAdminSupabase } from "@/lib/supabase/server";
 import { getAdapter } from "@/lib/email";
+import { trackedHtml } from "@/lib/email/tracking";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -80,6 +81,20 @@ async function handler(req: Request) {
       continue;
     }
 
+    if (msg.campaign_id) {
+      const { data: campaign } = await sb
+        .from("campaigns")
+        .select("status")
+        .eq("id", msg.campaign_id)
+        .maybeSingle();
+      if (!campaign || campaign.status !== "active") {
+        const retryAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+        await sb.from("email_queue").update({ locked_at: null, send_after: retryAt }).eq("id", row.id);
+        skipped++;
+        continue;
+      }
+    }
+
     // Stop-on-reply: skip if the thread already got a reply.
     const { data: thread } = await sb
       .from("threads")
@@ -132,6 +147,7 @@ async function handler(req: Request) {
       to: msg.to_email,
       subject: msg.subject,
       text: msg.body,
+      html: trackedHtml(msg.body, msg.id),
       replyTo: account.from_email,
       headers: { "X-Avarent-Message-Id": msg.id },
     });

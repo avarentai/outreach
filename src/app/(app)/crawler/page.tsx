@@ -4,7 +4,6 @@ import * as React from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
-import { simulateCrawl } from "@/lib/engines/crawl-sim";
 import { normalizeDomain } from "@/lib/engines/crawler";
 import type { CrawlResult, CrawlPage } from "@/lib/types";
 import { PageHeader, SectionTitle, StatCard } from "@/components/shared";
@@ -76,7 +75,7 @@ const TECH_CATEGORY_COLOR: Record<string, string> = {
 
 export default function CrawlerPage() {
   const companies = useStore((s) => s.companies);
-  const runCrawl = useStore((s) => s.runCrawl);
+  const updateCompany = useStore((s) => s.updateCompany);
 
   const [domainInput, setDomainInput] = React.useState("");
   const [selectedCompanyId, setSelectedCompanyId] = React.useState("");
@@ -100,7 +99,20 @@ export default function CrawlerPage() {
     [companies],
   );
 
-  function handleCrawlDomain(e?: React.FormEvent) {
+  async function crawlDomain(domain: string) {
+    const response = await fetch("/api/crawl", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ domain }),
+    });
+    const data = (await response.json()) as CrawlResult & { error?: string };
+    if (!response.ok || data.status === "error") {
+      throw new Error(data.error ?? `Crawl failed with status ${response.status}`);
+    }
+    return data;
+  }
+
+  async function handleCrawlDomain(e?: React.FormEvent) {
     e?.preventDefault();
     const domain = normalizeDomain(domainInput);
     if (!domain || !domain.includes(".")) {
@@ -108,29 +120,56 @@ export default function CrawlerPage() {
       return;
     }
     setCrawling(true);
-    // Defer so the loading spinner paints; the crawl itself stays synchronous.
-    setTimeout(() => {
-      // Deterministic — regex + HTML-signature parsing. No network, no LLM.
-      const res = simulateCrawl(domain);
+    try {
+      const res = await crawlDomain(domain);
       setResult(res);
-      setCrawling(false);
       toast.success(
         `Crawled ${domain} — ${res.emailsFound.length} emails across ${res.pagesCrawled} pages`,
       );
-    }, 300);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The crawl failed.");
+    } finally {
+      setCrawling(false);
+    }
   }
 
-  function handleCrawlCompany() {
+  async function handleCrawlCompany() {
     const company = companies.find((c) => c.id === selectedCompanyId);
     if (!company) {
       toast.error("Select a company to enrich");
       return;
     }
-    runCrawl(company.id);
-    const res = simulateCrawl(company.domain);
-    setResult(res);
-    setDomainInput(company.domain);
-    toast.success(`Enriched ${company.name} — ${res.emailsFound.length} emails found`);
+    setCrawling(true);
+    updateCompany(company.id, {
+      enrichment: { ...company.enrichment, crawlStatus: "crawling" },
+    });
+    try {
+      const res = await crawlDomain(company.domain);
+      setResult(res);
+      setDomainInput(company.domain);
+      updateCompany(company.id, {
+        enrichment: {
+          ...company.enrichment,
+          crawlStatus: "done",
+          lastCrawledAt: res.finishedAt,
+          techStack: res.techStack,
+          socialLinks: res.socialLinks,
+          discoveredEmails: res.emailsFound,
+          contactPageUrl: res.pages.find((page) => page.type === "contact")?.url,
+          aboutPageUrl: res.pages.find((page) => page.type === "about")?.url,
+          careersPageUrl: res.pages.find((page) => page.type === "careers")?.url,
+          teamPageUrl: res.pages.find((page) => page.type === "team")?.url,
+        },
+      });
+      toast.success(`Enriched ${company.name} — ${res.emailsFound.length} emails found`);
+    } catch (error) {
+      updateCompany(company.id, {
+        enrichment: { ...company.enrichment, crawlStatus: "error" },
+      });
+      toast.error(error instanceof Error ? error.message : "The crawl failed.");
+    } finally {
+      setCrawling(false);
+    }
   }
 
   return (

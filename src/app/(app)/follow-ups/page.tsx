@@ -53,6 +53,7 @@ export default function FollowUpsPage() {
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   // Edited drafts held locally, keyed by follow-up id.
   const [drafts, setDrafts] = React.useState<Record<string, Draft>>({});
+  const [sending, setSending] = React.useState(false);
 
   const contactById = React.useMemo(
     () => new Map(contacts.map((c) => [c.id, c])),
@@ -136,12 +137,44 @@ export default function FollowUpsPage() {
     toast.success("Follow-up queue regenerated");
   };
 
-  const sendSelected = () => {
-    const ids = [...selected];
-    ids.forEach((id) => setFollowUpStatus(id, "sent"));
+  const sendFollowUps = async (ids: string[]) => {
+    setSending(true);
+    let sent = 0;
+    let failed = 0;
+    for (const id of ids) {
+      const followUp = followUps.find((item) => item.id === id);
+      const contact = followUp ? contactById.get(followUp.contactId) : undefined;
+      if (!followUp || !contact) { failed++; continue; }
+      const draft = draftFor(followUp);
+      try {
+        const response = await fetch("/api/email/send", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            to: contact.email,
+            subject: draft.subject,
+            text: draft.body,
+            contactId: followUp.contactId,
+            companyId: followUp.companyId,
+            campaignId: followUp.campaignId,
+            followUpId: followUp.id,
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? "Send failed");
+        setFollowUpStatus(id, "sent");
+        sent++;
+      } catch {
+        failed++;
+      }
+    }
     setSelected(new Set());
-    toast.success(`${ids.length} follow-up${ids.length === 1 ? "" : "s"} sent`);
+    setSending(false);
+    if (sent) toast.success(`${sent} follow-up${sent === 1 ? "" : "s"} sent`);
+    if (failed) toast.error(`${failed} follow-up${failed === 1 ? "" : "s"} failed`);
   };
+
+  const sendSelected = () => void sendFollowUps([...selected]);
 
   const approveAll = () => {
     const ids = followUps.filter((f) => f.status === "due").map((f) => f.id);
@@ -152,9 +185,7 @@ export default function FollowUpsPage() {
 
   const sendAllApproved = () => {
     const ids = followUps.filter((f) => f.status === "approved").map((f) => f.id);
-    ids.forEach((id) => setFollowUpStatus(id, "sent"));
-    setSelected(new Set());
-    toast.success(`${ids.length} approved follow-up${ids.length === 1 ? "" : "s"} sent`);
+    void sendFollowUps(ids);
   };
 
   return (
@@ -168,7 +199,7 @@ export default function FollowUpsPage() {
             <Button variant="outline" onClick={approveAll} disabled={counts.due === 0}>
               <Check className="size-4" /> Approve all
             </Button>
-            <Button variant="outline" onClick={sendAllApproved} disabled={counts.approved === 0}>
+            <Button variant="outline" onClick={sendAllApproved} disabled={counts.approved === 0 || sending}>
               <Send className="size-4" /> Send all approved
             </Button>
             <Button onClick={regenerate}>
@@ -217,7 +248,7 @@ export default function FollowUpsPage() {
               size="sm"
               variant="success"
               onClick={sendSelected}
-              disabled={selected.size === 0}
+              disabled={selected.size === 0 || sending}
             >
               <Send className="size-3.5" /> Send selected
             </Button>
@@ -421,7 +452,8 @@ export default function FollowUpsPage() {
                     <Button
                       size="sm"
                       variant="success"
-                      onClick={() => applyStatus(f.id, "sent")}
+                      onClick={() => void sendFollowUps([f.id])}
+                      disabled={sending}
                     >
                       <Send className="size-3.5" /> Send
                     </Button>

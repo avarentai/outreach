@@ -43,7 +43,6 @@ import { generateSeed } from "./seed";
 import type { DataSnapshot } from "./engines/analytics";
 import { generateFollowUps } from "./engines/followups";
 import { scoreContact } from "./engines/scoring";
-import { simulateCrawl } from "./engines/crawl-sim";
 import { isLiveMode } from "./supabase/client";
 import { getBrowserDb, hydrateWorkspace, repo } from "./data";
 
@@ -81,6 +80,7 @@ export interface AppState {
   /* LIVE-mode auth + hydration (no-ops / demo-safe when !isLiveMode) */
   setSession: (user: User, workspaceId: string) => void;
   hydrateFromDb: (workspaceId: string) => Promise<void>;
+  updateWorkspace: (patch: Partial<Pick<Workspace, "name" | "domain" | "timezone">>) => void;
 
   logActivity: (a: Omit<Activity, "id" | "createdAt"> & { createdAt?: string }) => void;
 
@@ -96,6 +96,7 @@ export interface AppState {
   addTemplate: (t: Partial<EmailTemplate> & { name: string }) => EmailTemplate;
   updateTemplate: (id: string, patch: Partial<EmailTemplate>) => void;
   deleteTemplate: (id: string) => void;
+  addSnippet: (snippet: Omit<Snippet, "id">) => Snippet;
 
   addCampaign: (c: Partial<Campaign> & { name: string; sequenceId: string }) => Campaign;
   updateCampaign: (id: string, patch: Partial<Campaign>) => void;
@@ -105,6 +106,7 @@ export interface AppState {
   updateSequence: (id: string, patch: Partial<Sequence>) => void;
 
   updateThread: (id: string, patch: Partial<Thread>) => void;
+  addMessage: (message: EmailMessage) => void;
   setThreadState: (id: string, state: ThreadState) => void;
   setThreadSentiment: (id: string, sentiment: ReplySentiment) => void;
   markMeetingBooked: (threadId: string) => void;
@@ -113,6 +115,8 @@ export interface AppState {
   addNote: (n: Omit<Note, "id" | "createdAt" | "updatedAt">) => void;
   addMeeting: (m: Omit<Meeting, "id" | "createdAt">) => Meeting;
   updateMeeting: (id: string, patch: Partial<Meeting>) => void;
+  addAttachment: (attachment: Omit<Attachment, "id" | "createdAt"> & Partial<Pick<Attachment, "id" | "createdAt">>) => Attachment;
+  addExperiment: (experiment: Omit<Experiment, "id" | "createdAt">) => Experiment;
 
   updateScoring: (config: ScoringConfig) => void;
   recomputeScores: () => void;
@@ -204,6 +208,11 @@ export const useStore = create<AppState>()(
           followUps: snap.followUps,
           hydrated: true,
         }));
+      },
+
+      updateWorkspace: (patch) => {
+        set((s) => ({ workspace: { ...s.workspace, ...patch } }));
+        sync(get().workspaceId, () => repo.workspaces.upsert(get().workspace, get().workspaceId!));
       },
 
       logActivity: (a) => {
@@ -369,6 +378,13 @@ export const useStore = create<AppState>()(
         if (archived) sync(get().workspaceId, () => repo.templates.upsert(archived, get().workspaceId!));
       },
 
+      addSnippet: (input) => {
+        const snippet: Snippet = { id: `sn_${nanoid(8)}`, ...input };
+        set((s) => ({ snippets: [snippet, ...s.snippets] }));
+        sync(get().workspaceId, () => repo.snippets.upsert(snippet, get().workspaceId!));
+        return snippet;
+      },
+
       addCampaign: (c) => {
         const camp: Campaign = {
           id: `camp_${nanoid(8)}`,
@@ -445,6 +461,24 @@ export const useStore = create<AppState>()(
         set((s) => ({ threads: s.threads.map((t) => (t.id === id ? { ...t, ...patch } : t)) }));
         const updated = get().threads.find((t) => t.id === id);
         if (updated) sync(get().workspaceId, () => repo.threads.upsert(updated, get().workspaceId!));
+      },
+
+      addMessage: (message) => {
+        set((s) => ({
+          messages: [...s.messages, message],
+          threads: s.threads.map((thread) =>
+            thread.id === message.threadId
+              ? {
+                  ...thread,
+                  messageIds: [...thread.messageIds, message.id],
+                  lastMessageAt: message.sentAt ?? message.createdAt,
+                }
+              : thread,
+          ),
+        }));
+        sync(get().workspaceId, () => repo.messages.upsert(message, get().workspaceId!));
+        const thread = get().threads.find((item) => item.id === message.threadId);
+        if (thread) sync(get().workspaceId, () => repo.threads.upsert(thread, get().workspaceId!));
       },
 
       setThreadState: (id, state) => {
@@ -525,6 +559,28 @@ export const useStore = create<AppState>()(
         if (updated) sync(get().workspaceId, () => repo.meetings.upsert(updated, get().workspaceId!));
       },
 
+      addAttachment: (input) => {
+        const attachment: Attachment = {
+          ...input,
+          id: input.id ?? `att_${nanoid(8)}`,
+          createdAt: input.createdAt ?? new Date().toISOString(),
+        };
+        set((s) => ({ attachments: [attachment, ...s.attachments] }));
+        sync(get().workspaceId, () => repo.attachments.upsert(attachment, get().workspaceId!));
+        return attachment;
+      },
+
+      addExperiment: (input) => {
+        const experiment: Experiment = {
+          id: `exp_${nanoid(8)}`,
+          createdAt: new Date().toISOString(),
+          ...input,
+        };
+        set((s) => ({ experiments: [experiment, ...s.experiments] }));
+        sync(get().workspaceId, () => repo.experiments.upsert(experiment, get().workspaceId!));
+        return experiment;
+      },
+
       updateScoring: (config) => {
         set({ scoring: config });
         sync(get().workspaceId, () => repo.scoring.upsert(config, get().workspaceId!));
@@ -597,37 +653,49 @@ export const useStore = create<AppState>()(
         }
       },
 
-      runCrawl: (companyId) => {
+      runCrawl: async (companyId) => {
         const company = get().companies.find((c) => c.id === companyId);
         if (!company) return;
         get().updateCompany(companyId, {
           enrichment: { ...company.enrichment, crawlStatus: "crawling" },
         });
-        // Deterministic simulated crawl (no network in demo mode).
-        const result = simulateCrawl(company.domain);
-        get().updateCompany(companyId, {
-          enrichment: {
-            ...company.enrichment,
-            crawlStatus: "done",
-            lastCrawledAt: new Date().toISOString(),
-            techStack: result.techStack,
-            socialLinks: result.socialLinks,
-            discoveredEmails: result.emailsFound,
-            contactPageUrl: result.pages.find((p) => p.type === "contact")?.url,
-            aboutPageUrl: result.pages.find((p) => p.type === "about")?.url,
-            careersPageUrl: result.pages.find((p) => p.type === "careers")?.url,
-            teamPageUrl: result.pages.find((p) => p.type === "team")?.url,
-          },
-        });
-        // updateCompany above already mirrors the company; also persist the crawl run.
-        const crawlResult: CrawlResult = { ...result, companyId };
-        sync(get().workspaceId, () => repo.crawlResults.upsert(crawlResult, get().workspaceId!));
-        get().logActivity({
-          type: "crawl_completed",
-          actorId: get().currentUserId,
-          companyId,
-          summary: `Crawled ${company.domain} — ${result.emailsFound.length} emails, ${result.pagesCrawled} pages`,
-        });
+        try {
+          const response = await fetch("/api/crawl", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ domain: company.domain }),
+          });
+          const result = (await response.json()) as CrawlResult & { error?: string };
+          if (!response.ok || result.status === "error") {
+            throw new Error(result.error ?? "Crawl failed");
+          }
+          get().updateCompany(companyId, {
+            enrichment: {
+              ...company.enrichment,
+              crawlStatus: "done",
+              lastCrawledAt: result.finishedAt ?? new Date().toISOString(),
+              techStack: result.techStack,
+              socialLinks: result.socialLinks,
+              discoveredEmails: result.emailsFound,
+              contactPageUrl: result.pages.find((p) => p.type === "contact")?.url,
+              aboutPageUrl: result.pages.find((p) => p.type === "about")?.url,
+              careersPageUrl: result.pages.find((p) => p.type === "careers")?.url,
+              teamPageUrl: result.pages.find((p) => p.type === "team")?.url,
+            },
+          });
+          const crawlResult: CrawlResult = { ...result, companyId };
+          sync(get().workspaceId, () => repo.crawlResults.upsert(crawlResult, get().workspaceId!));
+          get().logActivity({
+            type: "crawl_completed",
+            actorId: get().currentUserId,
+            companyId,
+            summary: `Crawled ${company.domain} — ${result.emailsFound.length} emails, ${result.pagesCrawled} pages`,
+          });
+        } catch {
+          get().updateCompany(companyId, {
+            enrichment: { ...company.enrichment, crawlStatus: "error" },
+          });
+        }
       },
 
       importContacts: (rows) => {

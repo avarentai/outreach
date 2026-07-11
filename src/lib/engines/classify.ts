@@ -74,7 +74,7 @@ export function classifyReply(body: string, subject = ""): Classification {
   const text = `${subject}\n${body}`;
   const matched: string[] = [];
   const scores = new Map<ReplyIntent, number>();
-  let sentimentVote = { positive: 0, negative: 0, neutral: 0 };
+  const sentimentVote = { positive: 0, negative: 0, neutral: 0 };
 
   for (const sig of SIGNALS) {
     let hits = 0;

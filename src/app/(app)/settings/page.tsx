@@ -40,6 +40,9 @@ import {
   Save,
   Flame,
   Info,
+  Loader2,
+  Unplug,
+  Send,
 } from "lucide-react";
 
 type TabKey =
@@ -110,11 +113,11 @@ const TIMEZONES = [
 
 function WorkspaceTab() {
   const workspace = useStore((s) => s.workspace);
+  const updateWorkspace = useStore((s) => s.updateWorkspace);
   const companies = useStore((s) => s.companies);
   const contacts = useStore((s) => s.contacts);
   const users = useStore((s) => s.users);
 
-  // No store setter for workspace — edits live in local component state.
   const [name, setName] = React.useState(workspace.name);
   const [domain, setDomain] = React.useState(workspace.domain);
   const [timezone, setTimezone] = React.useState(workspace.timezone);
@@ -147,13 +150,12 @@ function WorkspaceTab() {
           <Separator className="my-4" />
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">
-              {dirty
-                ? "Unsaved changes — workspace edits are local in this demo."
-                : "All changes saved."}
+              {dirty ? "Unsaved changes." : "All changes saved."}
             </p>
             <Button
               disabled={!dirty}
               onClick={() => {
+                updateWorkspace({ name: name.trim(), domain: domain.trim(), timezone });
                 toast.success("Workspace settings saved");
               }}
             >
@@ -225,6 +227,30 @@ function TeamTab() {
   const users = useStore((s) => s.users);
   const currentUserId = useStore((s) => s.currentUserId);
   const [inviteOpen, setInviteOpen] = React.useState(false);
+  const [inviteEmail, setInviteEmail] = React.useState("");
+  const [inviteRole, setInviteRole] = React.useState<UserRole>("member");
+  const [inviting, setInviting] = React.useState(false);
+
+  async function sendInvite() {
+    setInviting(true);
+    try {
+      const response = await fetch("/api/team/invite", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Could not send invitation.");
+      setInviteOpen(false);
+      setInviteEmail("");
+      setInviteRole("member");
+      toast.success(data.invited ? "Invitation sent" : "Member added");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not send invitation.");
+    } finally {
+      setInviting(false);
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -318,10 +344,10 @@ function TeamTab() {
         />
         <DialogBody className="space-y-4">
           <Field label="Email address">
-            <Input placeholder="teammate@company.com" type="email" />
+            <Input placeholder="teammate@company.com" type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} />
           </Field>
           <Field label="Role">
-            <Select defaultValue="member">
+            <Select value={inviteRole} onChange={(e) => setInviteRole(e.target.value as UserRole)}>
               {(Object.keys(ROLE_META) as UserRole[]).map((r) => (
                 <option key={r} value={r}>
                   {ROLE_META[r].label}
@@ -329,21 +355,13 @@ function TeamTab() {
               ))}
             </Select>
           </Field>
-          <div className="flex items-start gap-2 rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
-            <Info className="mt-0.5 size-3.5 shrink-0" />
-            Invitations are visual only in this demo — no email is sent.
-          </div>
         </DialogBody>
         <DialogFooter>
           <Button variant="ghost" onClick={() => setInviteOpen(false)}>
             Cancel
           </Button>
-          <Button
-            onClick={() => {
-              setInviteOpen(false);
-              toast.success("Invitation queued");
-            }}
-          >
+          <Button onClick={sendInvite} disabled={inviting || !inviteEmail.trim()}>
+            {inviting ? <Loader2 className="size-4 animate-spin" /> : <Mail className="size-4" />}
             Send invite
           </Button>
         </DialogFooter>
@@ -380,6 +398,93 @@ function AccountsTab() {
   const [fromEmail, setFromEmail] = React.useState("");
   const [provider, setProvider] = React.useState<SendingProvider>("resend");
   const [dailyLimit, setDailyLimit] = React.useState(50);
+  const [zohoEmail, setZohoEmail] = React.useState("");
+  const [zohoPassword, setZohoPassword] = React.useState("");
+  const [zohoFromName, setZohoFromName] = React.useState("");
+  const [zohoRegion, setZohoRegion] = React.useState("us");
+  const [smtpStatus, setSmtpStatus] = React.useState<{
+    connected: boolean;
+    email?: string;
+    host?: string;
+    managed?: boolean;
+  }>({ connected: false });
+  const [smtpBusy, setSmtpBusy] = React.useState(false);
+  const [smtpError, setSmtpError] = React.useState("");
+  const [testRecipient, setTestRecipient] = React.useState("");
+
+  React.useEffect(() => {
+    fetch("/api/smtp/config")
+      .then((response) => response.json())
+      .then((data) => setSmtpStatus(data))
+      .catch(() => setSmtpStatus({ connected: false }));
+  }, []);
+
+  async function connectZoho(event: React.FormEvent) {
+    event.preventDefault();
+    setSmtpBusy(true);
+    setSmtpError("");
+    try {
+      const response = await fetch("/api/smtp/config", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          email: zohoEmail,
+          password: zohoPassword,
+          fromName: zohoFromName,
+          region: zohoRegion,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Zoho connection failed.");
+      setSmtpStatus(data);
+      setZohoPassword("");
+      toast.success("Zoho SMTP connected");
+    } catch (error) {
+      setSmtpError(error instanceof Error ? error.message : "Zoho connection failed.");
+    } finally {
+      setSmtpBusy(false);
+    }
+  }
+
+  async function disconnectZoho() {
+    setSmtpBusy(true);
+    setSmtpError("");
+    try {
+      const response = await fetch("/api/smtp/config", { method: "DELETE" });
+      if (!response.ok) throw new Error("Could not disconnect Zoho.");
+      setSmtpStatus({ connected: false });
+      toast.success("Zoho SMTP disconnected");
+    } catch (error) {
+      setSmtpError(error instanceof Error ? error.message : "Could not disconnect Zoho.");
+    } finally {
+      setSmtpBusy(false);
+    }
+  }
+
+  async function sendTestEmail(event: React.FormEvent) {
+    event.preventDefault();
+    setSmtpBusy(true);
+    setSmtpError("");
+    try {
+      const response = await fetch("/api/email/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          to: testRecipient,
+          subject: "Avarent SMTP test",
+          text: "This is a test email sent from Avarent Outbound through the connected Zoho SMTP account.",
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Could not send the test email.");
+      setTestRecipient("");
+      toast.success("Test email sent through Zoho");
+    } catch (error) {
+      setSmtpError(error instanceof Error ? error.message : "Could not send the test email.");
+    } finally {
+      setSmtpBusy(false);
+    }
+  }
 
   const reset = () => {
     setLabel("");
@@ -434,6 +539,106 @@ function AccountsTab() {
           color="var(--warning)"
         />
       </div>
+
+      <Card>
+        <CardContent className="p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <SectionTitle className="mb-1">Zoho Mail connection</SectionTitle>
+              <p className="max-w-[70ch] text-pretty text-xs text-muted-foreground">
+                Connect with your Zoho email and an app-specific password. Credentials stay in
+                server memory for this session and are never saved in browser storage.
+              </p>
+            </div>
+            <Badge variant={smtpStatus.connected ? "success" : "muted"}>
+              {smtpStatus.connected ? <ShieldCheck className="size-3" /> : <ShieldQuestion className="size-3" />}
+              {smtpStatus.connected ? "Connected" : "Not connected"}
+            </Badge>
+          </div>
+
+          {smtpStatus.connected ? (
+            <div className="mt-4 space-y-3 rounded-md border border-border p-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{smtpStatus.email}</p>
+                  <p className="text-xs text-muted-foreground">{smtpStatus.host}</p>
+                </div>
+                {smtpStatus.managed ? (
+                  <Badge variant="muted">Server managed</Badge>
+                ) : (
+                  <Button variant="outline" onClick={disconnectZoho} disabled={smtpBusy}>
+                    {smtpBusy ? <Loader2 className="size-4" /> : <Unplug className="size-4" />}
+                    Disconnect
+                  </Button>
+                )}
+              </div>
+              <form onSubmit={sendTestEmail} className="flex flex-col gap-2 border-t border-border pt-3 sm:flex-row">
+                <Input
+                  type="email"
+                  aria-label="Test email recipient"
+                  value={testRecipient}
+                  onChange={(event) => setTestRecipient(event.target.value)}
+                  placeholder="Test recipient email"
+                  required
+                />
+                <Button type="submit" disabled={smtpBusy || !testRecipient}>
+                  {smtpBusy ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                  Send test
+                </Button>
+              </form>
+            </div>
+          ) : (
+            <form onSubmit={connectZoho} className="mt-4 space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="Zoho email">
+                  <Input
+                    type="email"
+                    autoComplete="username"
+                    value={zohoEmail}
+                    onChange={(event) => setZohoEmail(event.target.value)}
+                    placeholder="you@yourdomain.com"
+                    required
+                  />
+                </Field>
+                <Field label="Zoho app password" hint="Create this in Zoho Security, not your normal password.">
+                  <Input
+                    type="password"
+                    autoComplete="current-password"
+                    value={zohoPassword}
+                    onChange={(event) => setZohoPassword(event.target.value)}
+                    required
+                  />
+                </Field>
+                <Field label="Sender name">
+                  <Input
+                    value={zohoFromName}
+                    onChange={(event) => setZohoFromName(event.target.value)}
+                    placeholder="Lucas Nadon"
+                    required
+                  />
+                </Field>
+                <Field label="Zoho data center">
+                  <Select value={zohoRegion} onChange={(event) => setZohoRegion(event.target.value)}>
+                    <option value="us">United States / Global</option>
+                    <option value="eu">Europe</option>
+                    <option value="in">India</option>
+                    <option value="au">Australia</option>
+                    <option value="jp">Japan</option>
+                  </Select>
+                </Field>
+              </div>
+              {smtpError && <p className="text-pretty text-xs text-destructive">{smtpError}</p>}
+              <Button type="submit" disabled={smtpBusy || !zohoEmail || !zohoPassword || !zohoFromName}>
+                {smtpBusy ? <Loader2 className="size-4" /> : <ShieldCheck className="size-4" />}
+                Test and connect
+              </Button>
+            </form>
+          )}
+          {smtpStatus.connected && smtpError && (
+            <p className="mt-3 text-pretty text-xs text-destructive">{smtpError}</p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <div className="flex items-center justify-between p-5 pb-3">
@@ -844,7 +1049,11 @@ function ScoringTab() {
 
 function SnippetsTab() {
   const snippets = useStore((s) => s.snippets);
+  const addSnippet = useStore((s) => s.addSnippet);
   const [open, setOpen] = React.useState(false);
+  const [trigger, setTrigger] = React.useState("");
+  const [snippetLabel, setSnippetLabel] = React.useState("");
+  const [content, setContent] = React.useState("");
 
   return (
     <div className="space-y-4">
@@ -895,30 +1104,30 @@ function SnippetsTab() {
       <Dialog open={open} onClose={() => setOpen(false)} size="sm">
         <DialogHeader
           title="Add snippet"
-          description="Snippets have no dedicated setter in this demo — this is a preview."
+          description="Create reusable text for email composers."
           onClose={() => setOpen(false)}
         />
         <DialogBody className="space-y-4">
           <Field label="Trigger" hint="Start with a slash, e.g. /pricing.">
-            <Input placeholder="/pricing" className="font-mono" />
+            <Input placeholder="/pricing" className="font-mono" value={trigger} onChange={(e) => setTrigger(e.target.value)} />
           </Field>
           <Field label="Label">
-            <Input placeholder="Pricing page" />
+            <Input placeholder="Pricing page" value={snippetLabel} onChange={(e) => setSnippetLabel(e.target.value)} />
           </Field>
           <Field label="Content">
-            <Textarea placeholder="https://avarent.ai/pricing" />
+            <Textarea placeholder="https://avarent.ai/pricing" value={content} onChange={(e) => setContent(e.target.value)} />
           </Field>
         </DialogBody>
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button
-            onClick={() => {
-              setOpen(false);
-              toast.success("Snippet preview created");
-            }}
-          >
+          <Button disabled={!trigger.trim() || !snippetLabel.trim() || !content.trim()} onClick={() => {
+            const normalized = trigger.trim().startsWith("/") ? trigger.trim() : `/${trigger.trim()}`;
+            addSnippet({ trigger: normalized, label: snippetLabel.trim(), content: content.trim() });
+            setTrigger(""); setSnippetLabel(""); setContent(""); setOpen(false);
+            toast.success("Snippet created");
+          }}>
             Add snippet
           </Button>
         </DialogFooter>
@@ -1004,11 +1213,20 @@ function Field({
   hint?: string;
   children: React.ReactNode;
 }) {
+  const id = React.useId();
+  const hintId = hint ? `${id}-hint` : undefined;
+  const control = React.isValidElement(children)
+    ? React.cloneElement(children as React.ReactElement<{ id?: string; "aria-describedby"?: string }>, {
+        id,
+        "aria-describedby": hintId,
+      })
+    : children;
+
   return (
     <div className="space-y-1.5">
-      <Label>{label}</Label>
-      {children}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      <Label htmlFor={id}>{label}</Label>
+      {control}
+      {hint && <p id={hintId} className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }

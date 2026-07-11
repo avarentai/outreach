@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+import { nanoid } from "nanoid";
+import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { PageHeader, SectionTitle } from "@/components/shared";
 import { Card } from "@/components/ui/card";
@@ -55,11 +57,14 @@ export default function InboxPage() {
   const markMeetingBooked = useStore((s) => s.markMeetingBooked);
   const updateContact = useStore((s) => s.updateContact);
   const addComment = useStore((s) => s.addComment);
+  const addMessage = useStore((s) => s.addMessage);
 
   const [tab, setTab] = React.useState<FilterTab>("all");
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [comment, setComment] = React.useState("");
   const [reply, setReply] = React.useState("");
+  const [sendingReply, setSendingReply] = React.useState(false);
+  const [replyError, setReplyError] = React.useState("");
 
   const contactById = React.useMemo(
     () => new Map(contacts.map((c) => [c.id, c])),
@@ -168,6 +173,60 @@ export default function InboxPage() {
     updateContact(selContact.id, {
       nextFollowUpAt: addDays(new Date(), 3).toISOString(),
     });
+  }
+
+  async function handleSendReply() {
+    if (!selected || !selContact || !reply.trim()) return;
+    setSendingReply(true);
+    setReplyError("");
+    const body = reply.trim();
+    const subject = selected.subject.toLowerCase().startsWith("re:")
+      ? selected.subject
+      : `Re: ${selected.subject}`;
+    const localMessageId = `msg_${nanoid(10)}`;
+    try {
+      const response = await fetch("/api/email/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          to: selContact.email,
+          subject,
+          text: body,
+          contactId: selected.contactId,
+          companyId: selected.companyId,
+          campaignId: selected.campaignId,
+          threadId: selected.id,
+          messageId: localMessageId,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Email was not sent.");
+      const now = new Date().toISOString();
+      addMessage({
+        id: localMessageId,
+        threadId: selected.id,
+        contactId: selected.contactId,
+        companyId: selected.companyId,
+        campaignId: selected.campaignId,
+        direction: "outbound",
+        status: "sent",
+        subject,
+        body,
+        fromEmail: data.fromEmail,
+        toEmail: selContact.email,
+        sentAt: now,
+        providerMessageId: data.messageId,
+        wordCount: body.split(/\s+/).filter(Boolean).length,
+        createdAt: now,
+      });
+      updateContact(selContact.id, { lastContactedAt: now });
+      setReply("");
+      toast.success(`Email sent to ${selContact.email}`);
+    } catch (error) {
+      setReplyError(error instanceof Error ? error.message : "Email was not sent.");
+    } finally {
+      setSendingReply(false);
+    }
   }
 
   if (threads.length === 0) {
@@ -424,16 +483,19 @@ export default function InboxPage() {
                   placeholder={`Reply to ${contactName(selContact)}…`}
                   className="min-h-[64px]"
                 />
+                {replyError && (
+                  <p className="mt-2 text-pretty text-xs text-destructive">{replyError}</p>
+                )}
                 <div className="mt-2 flex items-center justify-between">
                   <span className="text-xs text-muted-foreground">
-                    Replying from your connected account
+                    Sent through your connected Zoho account
                   </span>
                   <Button
                     size="sm"
-                    disabled={!reply.trim()}
-                    onClick={() => setReply("")}
+                    disabled={!reply.trim() || sendingReply}
+                    onClick={handleSendReply}
                   >
-                    <Send className="size-3.5" /> Send reply
+                    <Send className="size-3.5" /> {sendingReply ? "Sending…" : "Send reply"}
                   </Button>
                 </div>
               </div>

@@ -8,6 +8,7 @@ import { Avatar } from "@/components/ui/misc";
 import { Dropdown, DropdownItem, DropdownLabel, DropdownSeparator } from "@/components/ui/dropdown";
 import { Button } from "@/components/ui/button";
 import { Search, Moon, Sun, Menu, LogOut, RefreshCw, Command as CommandIcon, ChevronsUpDown } from "lucide-react";
+import { isLiveMode } from "@/lib/supabase/client";
 
 export function Topbar({
   onOpenCommand,
@@ -69,17 +70,21 @@ export function Topbar({
             </button>
           }
         >
-          <DropdownLabel>Switch user</DropdownLabel>
-          {users.map((u) => (
-            <DropdownItem key={u.id} onClick={() => login(u.id)} icon={<Avatar name={u.name} color={u.avatarColor} size={20} />}>
-              {u.name}
-              <span className="ml-auto text-xs capitalize text-muted-foreground">{u.role}</span>
-            </DropdownItem>
-          ))}
-          <DropdownSeparator />
-          <DropdownItem icon={<RefreshCw />} onClick={() => resetDemo()}>
-            Reset demo data
-          </DropdownItem>
+          {!isLiveMode && (
+            <>
+              <DropdownLabel>Switch user</DropdownLabel>
+              {users.map((u) => (
+                <DropdownItem key={u.id} onClick={() => login(u.id)} icon={<Avatar name={u.name} color={u.avatarColor} size={20} />}>
+                  {u.name}
+                  <span className="ml-auto text-xs capitalize text-muted-foreground">{u.role}</span>
+                </DropdownItem>
+              ))}
+              <DropdownSeparator />
+              <DropdownItem icon={<RefreshCw />} onClick={() => resetDemo()}>
+                Reset demo data
+              </DropdownItem>
+            </>
+          )}
           <DropdownItem
             icon={<LogOut />}
             destructive

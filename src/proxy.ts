@@ -1,5 +1,5 @@
 /* =========================================================================
- * Edge middleware — session refresh + route protection.
+ * Next.js proxy — session refresh + route protection.
  *
  * DEMO mode (NEXT_PUBLIC_DATA_MODE !== 'live'): a no-op — the whole app is
  * client-side, auth lives in localStorage, so we never touch the request.
@@ -24,7 +24,7 @@ function isPublicPath(pathname: string): boolean {
   );
 }
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   // DEMO mode: leave every request untouched.
   if (process.env.NEXT_PUBLIC_DATA_MODE !== "live") {
     return NextResponse.next();

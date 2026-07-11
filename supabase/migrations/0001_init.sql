@@ -59,12 +59,24 @@ create table if not exists memberships (
   primary key (workspace_id, user_id)
 );
 
--- helper: which workspaces the current user belongs to (used by RLS)
-create or replace function current_workspaces()
-returns setof uuid language sql stable security definer set search_path = public as $$
-  select workspace_id from memberships where user_id = auth.uid();
+-- RLS helper. The privileged lookup lives outside the exposed Data API schema;
+-- the public wrapper is invoker-only and returns data scoped by auth.uid().
+create schema if not exists private;
+revoke all on schema private from public, anon;
+grant usage on schema private to authenticated;
+
+create or replace function private.current_workspaces()
+returns setof uuid language sql stable security definer set search_path = '' as $$
+  select workspace_id from public.memberships where user_id = (select auth.uid());
 $$;
-revoke execute on function public.current_workspaces() from public;
+revoke execute on function private.current_workspaces() from public, anon;
+grant execute on function private.current_workspaces() to authenticated;
+
+create or replace function public.current_workspaces()
+returns setof uuid language sql stable security invoker set search_path = '' as $$
+  select * from private.current_workspaces();
+$$;
+revoke execute on function public.current_workspaces() from public, anon;
 grant execute on function public.current_workspaces() to authenticated;
 
 -- ------------------------------- companies --------------------------------
@@ -236,6 +248,7 @@ create table if not exists email_messages (
   scheduled_at timestamptz,
   sent_at timestamptz,
   opened_at timestamptz,
+  clicked_at timestamptz,
   replied_at timestamptz,
   bounce_reason text,
   word_count int not null default 0,
@@ -247,6 +260,8 @@ create index if not exists messages_ws_idx on email_messages(workspace_id);
 create index if not exists messages_thread_idx on email_messages(thread_id);
 create index if not exists messages_campaign_idx on email_messages(campaign_id);
 create index if not exists messages_status_idx on email_messages(workspace_id, status);
+create unique index if not exists email_messages_provider_message_id_unique
+  on email_messages(provider_message_id) where provider_message_id is not null;
 
 -- send queue (the worker drains this)
 create table if not exists email_queue (
@@ -294,6 +309,25 @@ create table if not exists attachments (
   uploaded_by uuid references profiles(id),
   created_at timestamptz not null default now()
 );
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'workspace-attachments',
+  'workspace-attachments',
+  false,
+  26214400,
+  array[
+    'application/pdf',
+    'text/plain',
+    'text/markdown',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  ]
+)
+on conflict (id) do update set
+  public = false,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
 
 -- -------------------------------- meetings --------------------------------
 create table if not exists meetings (

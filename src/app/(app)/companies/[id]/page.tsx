@@ -26,7 +26,7 @@ import {
   relativeTime,
   formatCompact,
 } from "@/lib/utils";
-import type { EmailMessage, Meeting, Activity } from "@/lib/types";
+import type { EmailMessage, Meeting, Activity, Attachment, AttachmentKind } from "@/lib/types";
 import * as Icons from "lucide-react";
 import {
   Building2,
@@ -104,9 +104,35 @@ export default function CompanyProfilePage() {
   const currentUserId = useStore((s) => s.currentUserId);
   const runCrawl = useStore((s) => s.runCrawl);
   const addNote = useStore((s) => s.addNote);
+  const addAttachment = useStore((s) => s.addAttachment);
 
   const [tab, setTab] = React.useState<TabValue>("overview");
   const [noteDraft, setNoteDraft] = React.useState("");
+  const [uploading, setUploading] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  async function uploadAttachment(file: File) {
+    if (!company) return;
+    setUploading(true);
+    try {
+      const ext = file.name.split(".").pop()?.toLowerCase();
+      const kind: AttachmentKind = ext === "pdf" ? "pdf" : ext === "pptx" ? "deck" : ext === "docx" ? "one_pager" : "other";
+      const body = new FormData();
+      body.set("file", file);
+      body.set("companyId", company.id);
+      body.set("kind", kind);
+      const response = await fetch("/api/attachments", { method: "POST", body });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Upload failed.");
+      addAttachment(data.attachment as Attachment);
+      toast.success("Attachment uploaded");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Upload failed.");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
 
   const userById = React.useMemo(() => new Map(users.map((u) => [u.id, u])), [users]);
 
@@ -690,14 +716,25 @@ export default function CompanyProfilePage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => toast("Upload is disabled in demo mode.", { description: "Attachments are read-only here." })}
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
                 >
-                  <Upload className="size-3.5" /> Upload
+                  <Upload className="size-3.5" /> {uploading ? "Uploading" : "Upload"}
                 </Button>
               }
             >
               Attachments
             </SectionTitle>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept=".pdf,.txt,.md,.docx,.pptx"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void uploadAttachment(file);
+              }}
+            />
             {companyAttachments.length === 0 ? (
               <EmptyState icon={<Paperclip className="size-7" />} title="No files" description="Decks, one-pagers, and contracts attach here." className="py-12" />
             ) : (
@@ -705,7 +742,7 @@ export default function CompanyProfilePage() {
                 {companyAttachments.map((a) => {
                   const uploader = userById.get(a.uploadedById);
                   return (
-                    <div key={a.id} className="flex items-center gap-3 rounded-lg border border-border p-3">
+                    <a key={a.id} href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-lg border border-border p-3 transition-colors hover:bg-accent">
                       <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
                         <FileText className="size-4" />
                       </div>
@@ -717,7 +754,7 @@ export default function CompanyProfilePage() {
                         </div>
                       </div>
                       <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
-                    </div>
+                    </a>
                   );
                 })}
               </div>

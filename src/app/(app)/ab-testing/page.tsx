@@ -389,6 +389,7 @@ function RateBar({
 /* ----------------------------- new experiment ----------------------------- */
 
 function NewExperimentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const addExperiment = useStore((s) => s.addExperiment);
   const [name, setName] = React.useState("");
   const [dimension, setDimension] = React.useState<ExperimentDimension>("subject");
   const [labelA, setLabelA] = React.useState("");
@@ -482,10 +483,20 @@ function NewExperimentDialog({ open, onClose }: { open: boolean; onClose: () => 
         >
           Cancel
         </Button>
-        <Button
-          disabled
-          title="Demo build — experiment creation is visual only"
-        >
+        <Button disabled={!name.trim() || !labelA.trim() || !labelB.trim() || minSample < 10} onClick={() => {
+          addExperiment({
+            name: name.trim(),
+            dimension,
+            status: "running",
+            minSamplePerVariant: minSample,
+            variants: [
+              { key: "A", label: labelA.trim(), sent: 0, replied: 0, positive: 0, meetings: 0 },
+              { key: "B", label: labelB.trim(), sent: 0, replied: 0, positive: 0, meetings: 0 },
+            ],
+          });
+          reset();
+          onClose();
+        }}>
           <Plus className="size-4" /> Launch experiment
         </Button>
       </DialogFooter>

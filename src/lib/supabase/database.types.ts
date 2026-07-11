@@ -470,6 +470,7 @@ export type Database = {
           from_email: string
           id: string
           opened_at: string | null
+          clicked_at: string | null
           provider_message_id: string | null
           replied_at: string | null
           scheduled_at: string | null
@@ -497,6 +498,7 @@ export type Database = {
           from_email: string
           id?: string
           opened_at?: string | null
+          clicked_at?: string | null
           provider_message_id?: string | null
           replied_at?: string | null
           scheduled_at?: string | null
@@ -524,6 +526,7 @@ export type Database = {
           from_email?: string
           id?: string
           opened_at?: string | null
+          clicked_at?: string | null
           provider_message_id?: string | null
           replied_at?: string | null
           scheduled_at?: string | null

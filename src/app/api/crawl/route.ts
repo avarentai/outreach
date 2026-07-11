@@ -5,6 +5,8 @@
  * ========================================================================= */
 
 import { NextResponse } from "next/server";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import {
   normalizeDomain,
   discoverLinks,
@@ -24,15 +26,43 @@ const MAX_PAGES = 12;
 const FETCH_TIMEOUT_MS = 6000;
 const PRIORITY = /(contact|about|team|career|job|leadership|people)/i;
 
-async function fetchText(url: string): Promise<{ html: string; status: number; headers: Record<string, string> }> {
+function isPrivateAddress(address: string) {
+  if (address.includes(":")) {
+    const value = address.toLowerCase();
+    return value === "::1" || value === "::" || value.startsWith("fc") || value.startsWith("fd") || /^fe[89ab]/.test(value) || value.startsWith("::ffff:127.") || value.startsWith("::ffff:10.") || value.startsWith("::ffff:192.168.");
+  }
+  const parts = address.split(".").map(Number);
+  return parts[0] === 10 || parts[0] === 127 || parts[0] === 0 || (parts[0] === 169 && parts[1] === 254) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168) || parts[0] >= 224;
+}
+
+async function assertPublicHost(hostname: string) {
+  if (hostname === "localhost" || isIP(hostname)) throw new Error("Private network targets are not allowed.");
+  const addresses = await lookup(hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) {
+    throw new Error("Private network targets are not allowed.");
+  }
+}
+
+async function fetchText(url: string, domain: string): Promise<{ html: string; status: number; headers: Record<string, string> }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: { "user-agent": "AvarentCrawler/1.0 (+deterministic; no-AI)" },
-    });
+    let current = new URL(url);
+    let res: Response | undefined;
+    for (let redirects = 0; redirects <= 4; redirects++) {
+      if (current.hostname !== domain && !current.hostname.endsWith(`.${domain}`)) throw new Error("Cross-domain redirects are not allowed.");
+      await assertPublicHost(current.hostname);
+      res = await fetch(current, {
+        signal: controller.signal,
+        redirect: "manual",
+        headers: { "user-agent": "AvarentCrawler/1.0 (+deterministic; no-AI)" },
+      });
+      if (![301, 302, 303, 307, 308].includes(res.status)) break;
+      const location = res.headers.get("location");
+      if (!location) break;
+      current = new URL(location, current);
+    }
+    if (!res) throw new Error("Fetch failed.");
     const html = await res.text();
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => (headers[k] = v));
@@ -72,7 +102,7 @@ export async function POST(req: Request) {
 
       let fetched;
       try {
-        fetched = await fetchText(url);
+        fetched = await fetchText(url, domain);
       } catch {
         pages.push({ url, type: classifyUrl(url), emails: [], status: 0 });
         continue;

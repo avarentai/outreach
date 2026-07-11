@@ -325,6 +325,14 @@ async function run(
 }
 
 export const repo = {
+  workspaces: {
+    async upsert(x: Workspace, ws: string): Promise<void> {
+      const db = getBrowserDb();
+      if (!db) return;
+      await run("workspaces.upsert", db.from(workspaces.table).upsert(workspaces.toRow(x, ws)));
+    },
+  },
+
   companies: {
     async upsert(x: Company, ws: string): Promise<void> {
       const db = getBrowserDb();
