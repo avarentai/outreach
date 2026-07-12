@@ -1,0 +1,39 @@
+name: Daily health email
+
+# Emails an operator health digest once a day via /api/notify — always-on,
+# independent of the Claude desktop app. Uses the same WORKER_SECRET as the
+# worker cron. Scheduled runs only fire from the DEFAULT branch (main).
+#
+# Requires (already set for the worker cron):
+#   • Variable  WORKER_URL     https://avarent-outbound.vercel.app
+#   • Secret    WORKER_SECRET
+# And in Vercel env: ALERT_EMAIL (recipient), RESEND_API_KEY, AGENT_SECRET, APP_URL.
+
+on:
+  schedule:
+    - cron: "0 12 * * *" # 12:00 UTC ≈ 8am ET, once daily
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "digest = always email; alert = only email if health is not green"
+        default: "digest"
+        required: false
+
+jobs:
+  email:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: POST /api/notify
+        env:
+          WORKER_URL: ${{ vars.WORKER_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+          MODE: ${{ github.event.inputs.mode || 'digest' }}
+        run: |
+          if [ -z "$WORKER_URL" ] || [ -z "$WORKER_SECRET" ]; then
+            echo "::error::Set WORKER_URL (variable) and WORKER_SECRET (secret) in repo Actions settings."
+            exit 1
+          fi
+          curl -sS -X POST "$WORKER_URL/api/notify?mode=$MODE" \
+            -H "x-worker-secret: $WORKER_SECRET" \
+            -w $'\nHTTP %{http_code}\n' --fail-with-body
