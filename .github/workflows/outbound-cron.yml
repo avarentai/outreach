@@ -1,0 +1,52 @@
+name: Outbound cron (worker + inbox sync)
+
+# Free (Vercel Hobby) replacement for Vercel Cron, which only runs once/day on
+# Hobby. Drives both scheduled endpoints every 10 min. Both accept the same
+# x-worker-secret. Scheduled runs only fire from the DEFAULT branch (main).
+#
+# Required repo config (Settings → Secrets and variables → Actions):
+#   • Variable  WORKER_URL     e.g. https://your-app.vercel.app   (no trailing slash)
+#   • Secret    WORKER_SECRET  same value as the WORKER_SECRET env var in Vercel
+#
+# Notes:
+#   • GitHub schedules are best-effort and can be delayed several minutes.
+#   • A scheduled workflow is auto-disabled after 60 days with no repo commits.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: outbound-cron
+  cancel-in-progress: false
+
+jobs:
+  cron:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Drain email queue (/api/worker/tick)
+        env:
+          WORKER_URL: ${{ vars.WORKER_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+        run: |
+          if [ -z "$WORKER_URL" ] || [ -z "$WORKER_SECRET" ]; then
+            echo "::error::Set WORKER_URL (variable) and WORKER_SECRET (secret) in repo Actions settings."
+            exit 1
+          fi
+          curl -sS -X POST "$WORKER_URL/api/worker/tick" \
+            -H "x-worker-secret: $WORKER_SECRET" \
+            -w $'\nHTTP %{http_code}\n' --fail-with-body
+
+      - name: Sync inbox (/api/email/sync) — best effort
+        if: ${{ always() }}
+        env:
+          WORKER_URL: ${{ vars.WORKER_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+        run: |
+          # Returns 503 until IMAP_* env is configured — that's expected, so
+          # this step never fails the run (unlike the worker tick above).
+          code=$(curl -sS -o /tmp/sync.out -w '%{http_code}' -X POST "$WORKER_URL/api/email/sync" \
+            -H "x-worker-secret: $WORKER_SECRET" || true)
+          echo "email/sync -> HTTP $code"; cat /tmp/sync.out 2>/dev/null || true
