@@ -40,6 +40,25 @@ function token(obj: unknown): string {
   return `c=${c}&s=${sign(c)}`;
 }
 
+const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+
+/**
+ * Pull a clean email + optional person name out of the routine's free-text
+ * `contact` (e.g. "Jane Smith <jane@acme.com>", "compliance@acme.com", or a
+ * "find on LinkedIn" hint with no email). Fed into the signed Add link so
+ * /api/leads/act can create a sendable contact without re-parsing.
+ */
+function parseContact(raw?: string): { email: string; first: string; last: string } {
+  const s = (raw ?? "").trim();
+  if (!s) return { email: "", first: "", last: "" };
+  const email = s.match(EMAIL_RE)?.[0]?.toLowerCase() ?? "";
+  let namePart = s.replace(EMAIL_RE, " ").replace(/[<>|,;—–-]+/g, " ").trim();
+  // Drop hint phrases ("reach via LinkedIn", URLs) so they don't become names.
+  if (/linkedin|https?:|www\.|\/|contact\s*page|\bfind\b|\bvia\b/i.test(namePart)) namePart = "";
+  const parts = namePart.split(/\s+/).filter(Boolean).slice(0, 3);
+  return { email, first: parts[0] ?? "", last: parts.slice(1).join(" ") };
+}
+
 interface CompanyInput {
   name?: string;
   website?: string;
@@ -96,15 +115,22 @@ export async function POST(req: Request) {
   lines.push((payload.intro ?? "").trim() || `Avarent — ${companies.length} prospects to review`);
   lines.push("");
   lines.push('Tap "Add" on the ones you want — each becomes a prospect in your pipeline.');
-  const allToken = token(companies.map((c) => ({ n: c.name, w: c.website ?? "", t: c.title ?? "" })));
+  const allToken = token(
+    companies.map((c) => {
+      const pc = parseContact(c.contact);
+      return { n: c.name, w: c.website ?? "", t: c.title ?? "", e: pc.email, f: pc.first, l: pc.last };
+    }),
+  );
   lines.push(`➕ Add ALL: ${base}/api/leads/act?d=addall&${allToken}`);
   lines.push("");
 
   companies.forEach((c, i) => {
+    const pc = parseContact(c.contact);
     lines.push(`${i + 1}. ${c.name}${c.website ? "  |  " + c.website : ""}`);
     if (c.why) lines.push(`   Why: ${c.why}`);
     if (c.title) lines.push(`   Who: ${c.title}`);
-    const t = token({ n: c.name, w: c.website ?? "", i: c.industry ?? "", y: c.why ?? "", t: c.title ?? "" });
+    if (pc.email) lines.push(`   Email: ${pc.email}`);
+    const t = token({ n: c.name, w: c.website ?? "", i: c.industry ?? "", y: c.why ?? "", t: c.title ?? "", e: pc.email, f: pc.first, l: pc.last });
     lines.push(`   ✅ Add:  ${base}/api/leads/act?d=add&${t}`);
     lines.push(`   ✕ Skip: ${base}/api/leads/act?d=skip&n=${encodeURIComponent(c.name ?? "")}`);
     lines.push("");
