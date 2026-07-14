@@ -50,6 +50,7 @@ import {
   Users,
   Timer,
   ChevronRight,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -152,6 +153,26 @@ export default function CampaignDetailPage() {
     toast.success(`Campaign ${status}`);
   };
 
+  // Queue prospects enrolled since launch. Idempotent — never re-sends.
+  const sync = async () => {
+    try {
+      const res = await fetch("/api/campaigns/activate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ campaignId: campaign.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Sync failed");
+      toast.success(
+        data.queued > 0
+          ? `${data.queued} new prospect${data.queued === 1 ? "" : "s"} queued`
+          : "All caught up — no new prospects to queue.",
+      );
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -178,9 +199,16 @@ export default function CampaignDetailPage() {
               </Badge>
               {canRun &&
                 (campaign.status === "active" ? (
-                  <Button variant="outline" onClick={() => run("paused")}>
-                    <Pause className="size-4" /> Pause
-                  </Button>
+                  <>
+                    {isLiveMode && (
+                      <Button variant="outline" onClick={() => void sync()}>
+                        <RefreshCw className="size-4" /> Sync new prospects
+                      </Button>
+                    )}
+                    <Button variant="outline" onClick={() => run("paused")}>
+                      <Pause className="size-4" /> Pause
+                    </Button>
+                  </>
                 ) : (
                   <Button onClick={() => run("active")}>
                     <Play className="size-4" />{" "}

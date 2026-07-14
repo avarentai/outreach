@@ -50,6 +50,13 @@ export interface MaterializeInput {
   companies: Company[];
   accounts: SendingAccount[];
   now: Date;
+  /**
+   * Contact ids that already have a message in this campaign. They are skipped
+   * so activation is idempotent: re-activating a running campaign (or syncing
+   * newly-enrolled prospects into it) queues only the newcomers and never
+   * re-sends to anyone already contacted. Defaults to none.
+   */
+  alreadyMessagedContactIds?: Iterable<string>;
 }
 
 export interface MaterializeOutput {
@@ -83,8 +90,12 @@ export function materializeCampaign(input: MaterializeInput): MaterializeOutput 
     ? templates.find((t) => t.id === firstEmail.templateId)
     : undefined;
 
-  // Only enroll deliverable contacts. Order is preserved for stable scheduling.
-  const enrolled = contacts.filter((c) => !c.unsubscribed && !c.bounced);
+  // Only enroll deliverable contacts we haven't already materialized for this
+  // campaign. Order is preserved for stable scheduling.
+  const alreadyMessaged = new Set(input.alreadyMessagedContactIds ?? []);
+  const enrolled = contacts.filter(
+    (c) => !c.unsubscribed && !c.bounced && !alreadyMessaged.has(c.id),
+  );
   if (enrolled.length === 0) return empty;
 
   const window = campaign.sendingWindow ?? DEFAULT_SENDING_WINDOW;

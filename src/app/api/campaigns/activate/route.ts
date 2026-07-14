@@ -6,6 +6,10 @@
  * use the SERVICE-ROLE client so RLS can't silently drop rows during the
  * multi-table insert. Scheduling/rendering is pure (lib/engines) — NO AI.
  *
+ * Idempotent: contacts that already have a message in this campaign are
+ * skipped, so calling this again on a running campaign only queues prospects
+ * enrolled since the last run (a "sync") and never re-sends to anyone.
+ *
  * Returns { threads, messages, queued } counts. A failed insert rolls forward
  * no further and returns a 500 with the underlying message.
  * ========================================================================= */
@@ -92,6 +96,7 @@ export async function POST(req: Request) {
     accountRes,
     templateRes,
     snippetRes,
+    sentRes,
   ] = await Promise.all([
     campaignRow.sequence_id
       ? sb.from("sequences").select("*").eq("id", campaignRow.sequence_id).maybeSingle()
@@ -100,13 +105,20 @@ export async function POST(req: Request) {
     sb.from("sending_accounts").select("*").eq("workspace_id", workspaceId),
     sb.from("templates").select("*").eq("workspace_id", workspaceId),
     sb.from("snippets").select("*").eq("workspace_id", workspaceId),
+    // Contacts already materialized for this campaign — so re-activating (or
+    // syncing newly-enrolled prospects) never double-sends to them.
+    sb.from("email_messages").select("contact_id").eq("campaign_id", campaignId).eq("workspace_id", workspaceId),
   ]);
 
   const firstError =
-    sequenceRes.error || contactRes.error || accountRes.error || templateRes.error || snippetRes.error;
+    sequenceRes.error || contactRes.error || accountRes.error || templateRes.error || snippetRes.error || sentRes.error;
   if (firstError) {
     return NextResponse.json({ error: firstError.message }, { status: 500 });
   }
+
+  const alreadyMessagedContactIds = new Set(
+    (sentRes.data ?? []).map((r) => r.contact_id as string).filter(Boolean),
+  );
 
   const contactRows = contactRes.data ?? [];
   const companyIds = [...new Set(contactRows.map((c) => c.company_id as string))];
@@ -128,6 +140,7 @@ export async function POST(req: Request) {
     companies: (companyRows ?? []).map((r) => companyMapper.fromRow(r)),
     accounts: (accountRes.data ?? []).map((r) => sendingAccounts.fromRow(r)),
     now,
+    alreadyMessagedContactIds,
   });
 
   // 7. Persist: threads, then messages, then queue rows, then flip status.
@@ -159,7 +172,12 @@ export async function POST(req: Request) {
 
     const { error: statusErr } = await sb
       .from("campaigns")
-      .update({ status: "active", started_at: now.toISOString(), updated_at: now.toISOString() })
+      .update({
+        status: "active",
+        // Preserve the original launch time when re-activating / syncing.
+        started_at: campaignRow.started_at ?? now.toISOString(),
+        updated_at: now.toISOString(),
+      })
       .eq("id", campaignId)
       .eq("workspace_id", workspaceId);
     if (statusErr) throw new Error(`campaign activation failed — ${statusErr.message}`);

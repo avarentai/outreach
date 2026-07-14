@@ -32,6 +32,7 @@ import {
   CalendarCheck,
   MoreHorizontal,
   ArrowRight,
+  RefreshCw,
 } from "lucide-react";
 
 const STATUS_BADGE: Record<CampaignStatus, "success" | "warning" | "info" | "muted"> = {
@@ -82,6 +83,26 @@ export default function CampaignsPage() {
       return;
     }
     setCampaignStatus(id, status);
+  }
+
+  // Re-run activation on an already-running campaign to queue prospects enrolled
+  // since it launched. Idempotent server-side — never re-sends to prior contacts.
+  async function syncCampaign(id: string) {
+    const response = await fetch("/api/campaigns/activate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ campaignId: id }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      toast.error(data.error ?? "Couldn't sync new prospects.");
+      return;
+    }
+    toast.success(
+      data.queued > 0
+        ? `${data.queued} new prospect${data.queued === 1 ? "" : "s"} queued`
+        : "All caught up — no new prospects to queue.",
+    );
   }
 
   React.useEffect(() => {
@@ -179,6 +200,7 @@ export default function CampaignsPage() {
                 prospectCount={contacts.filter((ct) => ct.campaignId === c.id).length}
                 trend={trend}
                 onStatus={(id, status) => void changeCampaignStatus(id, status)}
+                onSync={(id) => void syncCampaign(id)}
               />
             );
           })}
@@ -210,6 +232,7 @@ function CampaignCard({
   prospectCount,
   trend,
   onStatus,
+  onSync,
 }: {
   campaign: Campaign;
   stat?: CampaignStat;
@@ -217,6 +240,7 @@ function CampaignCard({
   prospectCount: number;
   trend: number[];
   onStatus: (id: string, status: CampaignStatus) => void;
+  onSync: (id: string) => void;
 }) {
   const meta = CAMPAIGN_STATUS_META[campaign.status];
   const canRun = campaign.status !== "completed";
@@ -252,9 +276,14 @@ function CampaignCard({
             >
               {canRun &&
                 (campaign.status === "active" ? (
-                  <DropdownItem icon={<Pause />} onClick={() => onStatus(campaign.id, "paused")}>
-                    Pause campaign
-                  </DropdownItem>
+                  <>
+                    <DropdownItem icon={<RefreshCw />} onClick={() => onSync(campaign.id)}>
+                      Sync new prospects
+                    </DropdownItem>
+                    <DropdownItem icon={<Pause />} onClick={() => onStatus(campaign.id, "paused")}>
+                      Pause campaign
+                    </DropdownItem>
+                  </>
                 ) : (
                   <DropdownItem icon={<Play />} onClick={() => onStatus(campaign.id, "active")}>
                     {campaign.status === "paused" ? "Resume campaign" : "Activate campaign"}
